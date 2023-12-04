@@ -1,0 +1,358 @@
+use anchor_lang::prelude::*;
+
+mod instructions;
+mod state;
+mod utils;
+
+use anchor_spl::token::Mint;
+
+use instructions::*;
+use state::RewardType;
+use state::Subscription;
+
+declare_id!("3bUy55JLr8ra1g1GT7bn7S2KNHPxZtoyc6uf9rcYG4tm");
+
+#[cfg(feature = "local-testing")]
+pub mod constants {
+    use solana_program::{pubkey, pubkey::Pubkey};
+    pub const FEES_WALLET: Pubkey = pubkey!("2z1kLqnyyZbcxBEYA7AU9wyhyrJ9Pz8BwBkn6KE4SMqw");
+    pub const USDC_MINT_PUBKEY: Pubkey = pubkey!("BHvJMjTHNZpwwbeDTHbuVK7YU8QU7m72jdyQcKFCmKAX");
+    pub const SUBSCRIPTION_WALLET: Pubkey = pubkey!("2z1kLqnyyZbcxBEYA7AU9wyhyrJ9Pz8BwBkn6KE4SMqw");
+}
+
+#[cfg(not(feature = "local-testing"))]
+pub mod constants {
+    use solana_program::{pubkey, pubkey::Pubkey};
+    pub const FEES_WALLET: Pubkey = pubkey!("2NkHMEEKymjrjjd9DSEprVV4E7nBr6aHzwFeusHxL2Q6");
+    pub const USDC_MINT_PUBKEY: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    pub const SUBSCRIPTION_WALLET: Pubkey = pubkey!("XLsdeHxUL83PkfwaP6uvVnhFvqQJSX7K7cBaLy3Guot");
+}
+
+#[constant]
+pub const STAKING_ENDS: i64 = 2015762363;
+
+#[constant]
+pub const WEIGHT: u128 = 1_000_000_000;
+
+#[derive(Accounts)]
+pub struct Test<'info> {
+    #[account()]
+    pub signer: Signer<'info>,
+}
+
+use crate::state::FontStyles;
+
+#[program]
+pub mod stake {
+
+    use super::*;
+
+    pub fn init(
+        ctx: Context<Init>,
+        slug: String,
+        name: String,
+        remove_branding: bool,
+        own_domain: bool,
+        subscription: Option<Subscription>,
+        start_date: i64,
+    ) -> Result<()> {
+        init_handler(
+            ctx,
+            slug,
+            name,
+            remove_branding,
+            own_domain,
+            subscription,
+            start_date,
+        )
+    }
+
+    pub fn init_collection(
+        ctx: Context<InitCollection>,
+        custodial: bool,
+        reward_type: RewardType,
+        reward: u64,
+        minimum_period: i64,
+        staking_starts_at: Option<i64>,
+        duration: Option<i64>,
+        max_stakers_count: u64,
+        lock_for_minimum_period: bool,
+    ) -> Result<()> {
+        init_collection_handler(
+            ctx,
+            custodial,
+            reward_type,
+            reward,
+            minimum_period,
+            staking_starts_at,
+            duration,
+            max_stakers_count,
+            lock_for_minimum_period,
+        )
+    }
+
+    pub fn update_theme(
+        ctx: Context<UpdateTheme>,
+        logo: Option<String>,
+        background: Option<String>,
+        body_font: Option<FontStyles>,
+        header_font: Option<FontStyles>,
+        primary_color: Option<String>,
+        secondary_color: Option<String>,
+        dark_mode: Option<bool>,
+    ) -> Result<()> {
+        update_theme_handler(
+            ctx,
+            logo,
+            background,
+            body_font,
+            header_font,
+            primary_color,
+            secondary_color,
+            dark_mode,
+        )
+    }
+
+    pub fn close_collection(ctx: Context<CloseCollection>) -> Result<()> {
+        close_collection_handler(ctx)
+    }
+
+    pub fn pay_subscription(ctx: Context<PaySubscription>) -> Result<()> {
+        pay_subscription_handler(ctx)
+    }
+
+    pub fn stake<'info>(ctx: Context<'_, '_, '_, 'info, Stake<'info>>) -> Result<()> {
+        stake_handler(ctx)
+    }
+
+    pub fn claim(ctx: Context<Claim>) -> Result<()> {
+        claim_handler(ctx)
+    }
+
+    pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+        unstake_handler(ctx)
+    }
+
+    pub fn extend_emission(ctx: Context<ExtendEmission>, new_ending_time: i64) -> Result<()> {
+        extend_emission_handler(ctx, new_ending_time)
+    }
+
+    pub fn add_funds(ctx: Context<AddFunds>, amount: u64) -> Result<()> {
+        add_funds_handler(ctx, amount)
+    }
+
+    pub fn remove_funds(ctx: Context<RemoveFunds>) -> Result<()> {
+        remove_funds_handler(ctx)
+    }
+
+    pub fn change_reward(ctx: Context<ChangeReward>, new_reward: u64) -> Result<()> {
+        change_reward_handler(ctx, new_reward)
+    }
+
+    pub fn close(ctx: Context<Close>) -> Result<()> {
+        close_handler(ctx)
+    }
+
+    pub fn update_stake_subscription(
+        ctx: Context<UpdateStake>,
+        subscription: Subscription,
+    ) -> Result<()> {
+        update_stake_subscription_handler(ctx, subscription)
+    }
+
+    pub fn update_stake_remove_branding(
+        ctx: Context<UpdateStake>,
+        remove_branding: bool,
+    ) -> Result<()> {
+        update_stake_remove_branding_handler(ctx, remove_branding)
+    }
+
+    pub fn update_stake_own_domain(ctx: Context<UpdateStake>, own_domain: bool) -> Result<()> {
+        update_stake_own_domain_handler(ctx, own_domain)
+    }
+
+    /// these are admin only functions
+    pub fn update_stake_next_payment_time(
+        ctx: Context<UpdateStakeAdmin>,
+        next_payment_time: i64,
+    ) -> Result<()> {
+        update_stake_next_payment_time_handler(ctx, next_payment_time)
+    }
+
+    pub fn resize(ctx: Context<Resize>) -> Result<()> {
+        resize_handler(ctx)
+    }
+
+    pub fn init_program_config(
+        ctx: Context<InitProgramConfig>,
+        stake_fee: u64,
+        unstake_fee: u64,
+        claim_fee: u64,
+        advanced_subscription_fee: u64,
+        pro_subscription_fee: u64,
+        ultimate_subscription_fee: u64,
+        extra_collection_fee: u64,
+        remove_branding_fee: u64,
+        own_domain_fee: u64,
+    ) -> Result<()> {
+        init_program_config_handler(
+            ctx,
+            stake_fee,
+            unstake_fee,
+            claim_fee,
+            advanced_subscription_fee,
+            pro_subscription_fee,
+            ultimate_subscription_fee,
+            extra_collection_fee,
+            remove_branding_fee,
+            own_domain_fee,
+        )
+    }
+
+    pub fn update_program_config(
+        ctx: Context<UpdateProgramConfig>,
+        stake_fee: Option<u64>,
+        unstake_fee: Option<u64>,
+        claim_fee: Option<u64>,
+        advanced_subscription_fee: Option<u64>,
+        pro_subscription_fee: Option<u64>,
+        ultimate_subscription_fee: Option<u64>,
+        extra_collection_fee: Option<u64>,
+        remove_branding_fee: Option<u64>,
+        own_domain_fee: Option<u64>,
+    ) -> Result<()> {
+        update_program_config_handler(
+            ctx,
+            stake_fee,
+            unstake_fee,
+            claim_fee,
+            advanced_subscription_fee,
+            pro_subscription_fee,
+            ultimate_subscription_fee,
+            extra_collection_fee,
+            remove_branding_fee,
+            own_domain_fee,
+        )
+    }
+}
+
+#[derive(Accounts)]
+pub struct VerifyMetadata<'info> {
+    pub mint: Account<'info, Mint>,
+    /// CHECK: checked in instruction
+    pub metadata_account: AccountInfo<'info>,
+}
+
+#[error_code]
+pub enum StakeError {
+    #[msg("Slug must be max 50 chars")]
+    SlugTooLong,
+    #[msg("Slug must be provided")]
+    SlugRequired,
+    #[msg("Name must be max 50 chars")]
+    NameTooLong,
+    #[msg("Name must be provided")]
+    NameRequired,
+    #[msg("Dont use profanity in a name")]
+    ProfanityDetected,
+    #[msg("Slug already exists - contact us if you think this is an error")]
+    SlugExists,
+    #[msg("insuficient balance for new staking duration, add funds before extending")]
+    InsufficientBalanceInVault,
+    #[msg("this STAKE is completed")]
+    StakeOver,
+    #[msg("this STAKE is not yet live")]
+    StakeNotLive,
+    #[msg("max stakers have been reached")]
+    MaxStakersReached,
+    #[msg("this staker is inactive")]
+    StakeInactive,
+    #[msg("this collection is inactive")]
+    CollectionInactive,
+    #[msg("this collection is still inactive")]
+    CollectionActive,
+    #[msg("nft is not included in the allowed collection")]
+    InvalidCollection,
+    #[msg("collection must be verified")]
+    CollectionNotVerified,
+    #[msg("token is not an NFT")]
+    TokenNotNFT,
+    #[msg("no reward mint has been configured for this stake")]
+    NoRewardMint,
+    #[msg("unexpected reward token")]
+    InvalidRewardToken,
+    #[msg("unexpected number of remaining accounts")]
+    UnexpectedRemainingAccounts,
+    #[msg("token account must contain 1 token")]
+    TokenAccountEmpty,
+    #[msg("the minimum staking period in seconds can't be negative")]
+    NegativePeriodValue,
+    #[msg("stake ends time must be greater than the current time and the start time")]
+    InvalidStakeEndTime,
+    #[msg("start time cannot be in the past")]
+    StartTimeInPast,
+    #[msg("max stakers can't be higher than the total collection size")]
+    TooManyStakers,
+    #[msg("max stakers must be larger than 0")]
+    NotEnoughStakers,
+    #[msg("failed to convert the time to i64")]
+    FailedTimeConversion,
+    #[msg("unable to get stake details bump")]
+    StakeBumpError,
+    #[msg("unable to subtract the given values")]
+    ProgramSubError,
+    #[msg("unable to multiply the given values")]
+    ProgramMulError,
+    #[msg("unable to divide the given values")]
+    ProgramDivError,
+    #[msg("unable to add the given values")]
+    ProgramAddError,
+    #[msg("minimum staking period not reached")]
+    MinimumPeriodNotReached,
+    #[msg("failed to build instruction")]
+    InstructionBuilderFailed,
+    #[msg("payment isn't yet due")]
+    PaymentNotDueYet,
+    #[msg("no payment due")]
+    NoPaymentDue,
+    #[msg("only the system admin can use this instruction")]
+    AdminOnly,
+    #[msg("the current signer doesn't have permission to perform this action")]
+    Unauthorized,
+    #[msg("this STAKE has reached its maximum collections")]
+    MaxCollections,
+    #[msg("update authority approval is required for minimum-term locking")]
+    UpdateAuthRequired,
+    #[msg("enforced locking period cannot be longer than 1 year")]
+    LockingPeriodTooLong,
+    #[msg("enforced locking period must be longer than 1 second")]
+    LockingPeriodTooShort,
+    #[msg("an invalid programData account was provided")]
+    InvalidProgramData,
+    #[msg("addons cannot be added to a STAKE in arrears")]
+    StakeInArrears,
+    #[msg("duration is required if using a token vault")]
+    DurationRequired,
+    #[msg("duration must me more than 0")]
+    DurationTooShort,
+    #[msg("cannot extend as no end date set")]
+    CannotExtendNoEndDate,
+    #[msg("all linked collections must be passed in remaining accounts")]
+    CollectionsMissing,
+    #[msg("There are no tokens to claim for this collection")]
+    NoTokensToClaim,
+    #[msg("There are still active stakers who have yet to claim")]
+    CollectionHasStakers,
+    #[msg("Slug must be a valid URL slug")]
+    InvalidSlug,
+    #[msg("Only accepts full arweave images")]
+    InvalidImage,
+    #[msg("Max 63 chars")]
+    ImageTooLong,
+    #[msg("Only hexadecimal colors are accepted - eg 0BFFD0")]
+    InvalidColor,
+    #[msg("Cannot close a staker that still has collections")]
+    StillHasCollections,
+    #[msg("Cannot close a staker that still has staked items")]
+    StillHasStakedItems,
+}

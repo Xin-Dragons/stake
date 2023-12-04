@@ -1,0 +1,25 @@
+[package]
+name = "stake"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "stake"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+local-testing = []
+
+[dependencies]
+anchor-lang = {version = "0.29.0", features = ["init-if-needed"]}
+anchor-spl = {version = "0.29.0", features = ["metadata"]}
+hex = "0.4.3"
+proc-macro-regex = "1.1.0"
+rustrict = "0.7.15"
+solana-program = "*"
