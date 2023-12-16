@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    state::{Collection, RewardType, Staker},
+    state::{Collection, Emission, RewardType, Staker},
     utils::{calc_actual_balance, calc_total_emission},
     StakeError,
 };
@@ -23,11 +23,18 @@ pub struct ChangeReward<'info> {
             b"collection",
         ],
         bump = collection.bump,
-        realloc = collection.current_len() + 16,
+        
+    )]
+    pub collection: Account<'info, Collection>,
+
+    #[account(
+        mut,
+        has_one = collection,
+        realloc = emission.current_len() + 16,
         realloc::payer = authority,
         realloc::zero = false
     )]
-    pub collection: Account<'info, Collection>,
+    pub emission: Account<'info, Emission>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -39,6 +46,7 @@ pub fn change_reward_handler(ctx: Context<ChangeReward>, new_reward: u64) -> Res
     let staker = &ctx.accounts.staker;
     let collection = &ctx.accounts.collection;
     let current_time = Clock::get().unwrap().unix_timestamp;
+    let emission = &mut ctx.accounts.emission;
 
     let Staker {
         is_active: staking_status,
@@ -48,59 +56,57 @@ pub fn change_reward_handler(ctx: Context<ChangeReward>, new_reward: u64) -> Res
     let Collection {
         max_stakers_count,
         current_stakers_count,
-        staking_ends_at,
-        staked_weight,
-        current_balance,
         ..
     } = **collection;
 
-    let current_reward = *collection.reward.last().unwrap();
-    let last_reward_change_time = *collection.reward_change_time.last().unwrap();
+    match emission.reward_type {
+        RewardType::Token => require!(Option::is_some(&emission.token_mint), StakeError::InvalidEmission),
+        _ => return err!(StakeError::InvalidEmission),
+    }
 
-    if Option::is_some(&staking_ends_at) {
-        require_gte!(
-            staking_ends_at.unwrap(),
-            current_time,
-            StakeError::StakeOver
-        );
+    let Emission {
+        end_time,
+        staked_weight,
+        current_balance,
+        ..
+    } = **emission;
+
+    let current_reward: u64 = *emission.reward.last().unwrap();
+    let last_reward_change_time = *emission.reward_change_time.last().unwrap();
+
+    if Option::is_some(&end_time) {
+        require_gte!(end_time.unwrap(), current_time, StakeError::StakeOver);
     }
 
     require_eq!(staking_status, true, StakeError::StakeInactive);
 
-    let collection = &mut ctx.accounts.collection;
+    let (current_actual_balance, _accrued_reward, new_staked_weight) = calc_actual_balance(
+        current_stakers_count,
+        staked_weight,
+        current_reward,
+        last_reward_change_time,
+        end_time,
+        current_time,
+        current_balance,
+        None,
+    )?;
 
-    match collection.reward_type {
-        RewardType::TransferToken => {
-            let (current_actual_balance, _accrued_reward, new_staked_weight) = calc_actual_balance(
-                current_stakers_count,
-                staked_weight,
-                current_reward,
-                last_reward_change_time,
-                staking_ends_at,
-                current_time,
-                current_balance,
-                None,
-            )?;
+    let new_emission = calc_total_emission(
+        new_reward,
+        max_stakers_count,
+        current_time,
+        end_time.expect("expected end date to be set"),
+    )?;
 
-            let new_emission = calc_total_emission(
-                new_reward,
-                max_stakers_count,
-                current_time,
-                staking_ends_at.expect("expected end date to be set"),
-            )?;
+    require_gte!(
+        current_actual_balance,
+        new_emission,
+        StakeError::InsufficientBalanceInVault
+    );
 
-            require_gte!(
-                current_actual_balance,
-                new_emission,
-                StakeError::InsufficientBalanceInVault
-            );
+    emission.staked_weight = new_staked_weight;
+    emission.current_balance = current_actual_balance;
 
-            collection.staked_weight = new_staked_weight;
-            collection.current_balance = current_actual_balance;
-        }
-        _ => {}
-    }
-
-    collection.change_reward(new_reward, current_time);
+    emission.change_reward(new_reward, current_time);
     Ok(())
 }

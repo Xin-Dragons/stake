@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    state::{Collection, Staker},
+    state::{Collection, Emission, RewardType, Staker},
     utils::{calc_actual_balance, calc_total_emission},
     StakeError,
 };
@@ -25,12 +25,19 @@ pub struct ExtendEmission<'info> {
     )]
     pub collection: Account<'info, Collection>,
 
+    #[account(
+        mut,
+        has_one = collection
+    )]
+    pub emission: Account<'info, Emission>,
+
     pub authority: Signer<'info>,
 }
 
 pub fn extend_emission_handler(ctx: Context<ExtendEmission>, new_ending_time: i64) -> Result<()> {
     let staker = &ctx.accounts.staker;
     let collection = &ctx.accounts.collection;
+    let emission = &ctx.accounts.emission;
     let current_time = Clock::get().unwrap().unix_timestamp;
 
     let Staker {
@@ -41,17 +48,26 @@ pub fn extend_emission_handler(ctx: Context<ExtendEmission>, new_ending_time: i6
     let Collection {
         max_stakers_count,
         current_stakers_count,
-        staking_ends_at,
-        staked_weight,
-        current_balance,
         ..
     } = **collection;
 
-    let current_reward = *collection.reward.last().unwrap();
-    let last_reward_change_time = *collection.reward_change_time.last().unwrap();
+    let Emission {
+        end_time,
+        staked_weight,
+        current_balance,
+        ..
+    } = **emission;
+
+    let current_reward = *emission.reward.last().unwrap();
+    let last_reward_change_time = *emission.reward_change_time.last().unwrap();
+
+    match emission.reward_type {
+        RewardType::Token => {}
+        _ => return err!(StakeError::InvalidEmission),
+    }
 
     require!(
-        Option::is_some(&staking_ends_at),
+        Option::is_some(&end_time),
         StakeError::CannotExtendNoEndDate
     );
     require_eq!(staking_status, true, StakeError::StakeInactive);
@@ -62,7 +78,7 @@ pub fn extend_emission_handler(ctx: Context<ExtendEmission>, new_ending_time: i6
     );
     require_gt!(
         new_ending_time,
-        staking_ends_at.unwrap(),
+        end_time.unwrap(),
         StakeError::InvalidStakeEndTime
     );
 
@@ -71,7 +87,7 @@ pub fn extend_emission_handler(ctx: Context<ExtendEmission>, new_ending_time: i6
         staked_weight,
         current_reward,
         last_reward_change_time,
-        staking_ends_at,
+        end_time,
         current_time,
         current_balance,
         Some(new_ending_time),
@@ -90,10 +106,10 @@ pub fn extend_emission_handler(ctx: Context<ExtendEmission>, new_ending_time: i6
         StakeError::InsufficientBalanceInVault
     );
 
-    let collection = &mut ctx.accounts.collection;
+    let emission = &mut ctx.accounts.emission;
 
-    collection.extend_staking(new_ending_time);
-    collection.staked_weight = new_staked_weight;
+    emission.extend_staking(new_ending_time);
+    emission.staked_weight = new_staked_weight;
 
     Ok(())
 }

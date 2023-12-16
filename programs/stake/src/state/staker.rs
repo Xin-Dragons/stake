@@ -27,6 +27,8 @@ pub struct Staker {
     pub slug: String,
     /// name of the project, max 50 chars (50 + 4)
     pub name: String,
+    /// optional custom domain, max 50 chars (1 + 4 + 50),
+    pub custom_domain: Option<String>,
     /// Active theme struct
     pub theme: Theme,
     /// Staker status (1)
@@ -49,6 +51,10 @@ pub struct Staker {
     pub nft_auth_bump: u8,
     /// staking start time  (8)
     pub start_date: i64,
+    /// optional token mint with mint auth (1 + 32)
+    pub token_mint: Option<Pubkey>,
+    /// use a token vault (1)
+    pub token_vault: bool,
     /// timestamp the next payment is due  (8)
     pub next_payment_time: i64,
     /// number of staked items (4)
@@ -57,8 +63,10 @@ pub struct Staker {
 
 impl Staker {
     pub const LEN: usize = 8
+        + 32
         + (4 + 50)
         + (4 + 50)
+        + (1 + 4 + 50)
         + std::mem::size_of::<Theme>()
         + 1
         + 1
@@ -67,11 +75,11 @@ impl Staker {
         + (1 + 32)
         + 8
         + 4
-        + 32
-        + 1
         + 1
         + 1
         + 8
+        + (1 + 32)
+        + 1
         + 8
         + 4;
 
@@ -91,13 +99,16 @@ impl Staker {
             slug: slug.to_owned(),
             name: name.to_owned(),
             theme: Theme::default(),
-            is_active: true,
+            custom_domain: None,
+            is_active: false,
+            token_vault: false,
             remove_branding,
             own_domain,
             subscription,
             prev_subscription: subscription,
             subscription_live_date: start_date,
             authority,
+            token_mint: None,
             token_auth_bump,
             nft_auth_bump,
             collections: vec![],

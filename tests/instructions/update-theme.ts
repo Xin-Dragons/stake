@@ -8,7 +8,7 @@ import { assert } from "chai"
 import { isEqual } from "lodash"
 import { assertErrorCode, expectFail } from "../helpers/utils"
 
-describe.only("Updating the theme", () => {
+describe("Updating the theme", () => {
   const slug = "update_theme"
   const keypair = umi.eddsa.generateKeypair()
   const stakerId = keypair.publicKey

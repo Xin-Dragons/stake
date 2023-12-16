@@ -11,7 +11,7 @@ import { createNewUser, programPaidBy } from "../helper"
 import { isEqual } from "lodash"
 import { Stake } from "../../target/types/stake"
 
-describe.only("Init Stakooor", () => {
+describe("Init Stakooor", () => {
   let creator: Keypair
   let creatorProgram: Program<Stake>
   let programConfig: anchor.IdlAccounts<Stake>["programConfig"]
@@ -43,25 +43,23 @@ describe.only("Init Stakooor", () => {
           "long_name",
           "This is a very very very long name, too long to be accepted by the program"
         ),
-      (err) => console.log(err)
+      (err) => assertErrorCode(err, "NameTooLong")
     )
   })
 
   it("Must include a name", async () => {
     await expectFail(
       () => init(creatorProgram, umi.eddsa.generateKeypair(), "missing_name", ""),
-      (err) => console.log(err)
+      (err) => assertErrorCode(err, "NameRequired")
     )
   })
 
-  it("Cannot include profanity", async () => {
-    it("Must include a name", async () => {
-      await expectFail(
-        () => init(creatorProgram, umi.eddsa.generateKeypair(), "fuck", "FUCK"),
-        (err) => console.log(err)
-      )
-    })
-  })
+  // it("Cannot include profanity", async () => {
+  //   await expectFail(
+  //     () => init(creatorProgram, umi.eddsa.generateKeypair(), "fuck", "FUCK"),
+  //     (err) => console.log(err)
+  //   )
+  // })
 
   it("cannot re initialize an existing stakooor", async () => {
     const slug = "test_collection2"
@@ -114,7 +112,7 @@ describe.only("Init Stakooor", () => {
     const slug = "advanced_stakooor"
     const balanceBefore = await fetchToken(umi, getTokenAccount(USDC.publicKey, creator.publicKey))
     const keypair = umi.eddsa.generateKeypair()
-    await init(creatorProgram, keypair, slug, { advanced: {} })
+    await init(creatorProgram, keypair, slug, "Advanced", { advanced: {} })
     const stakooor = await creatorProgram.account.staker.fetch(keypair.publicKey)
     const balanceAfter = await fetchToken(umi, getTokenAccount(USDC.publicKey, creator.publicKey))
     assert.ok(isEqual(stakooor.subscription, { advanced: {} }))
@@ -125,7 +123,7 @@ describe.only("Init Stakooor", () => {
     const slug = "pro_stakooor"
     const balanceBefore = await fetchToken(umi, getTokenAccount(USDC.publicKey, creator.publicKey))
     const keypair = umi.eddsa.generateKeypair()
-    await init(creatorProgram, keypair, slug, { pro: {} })
+    await init(creatorProgram, keypair, slug, "Pro", { pro: {} })
     const stakooor = await creatorProgram.account.staker.fetch(keypair.publicKey)
     const balanceAfter = await fetchToken(umi, getTokenAccount(USDC.publicKey, creator.publicKey))
     assert.ok(isEqual(stakooor.subscription, { pro: {} }))
@@ -136,7 +134,7 @@ describe.only("Init Stakooor", () => {
     const slug = "ultimate_stakooor"
     const balanceBefore = await fetchToken(umi, getTokenAccount(USDC.publicKey, creator.publicKey))
     const keypair = umi.eddsa.generateKeypair()
-    await init(creatorProgram, keypair, slug, { ultimate: {} })
+    await init(creatorProgram, keypair, slug, "Ultimate", { ultimate: {} })
     const stakooor = await creatorProgram.account.staker.fetch(keypair.publicKey)
     const balanceAfter = await fetchToken(umi, getTokenAccount(USDC.publicKey, creator.publicKey))
     assert.ok(isEqual(stakooor.subscription, { ultimate: {} }))

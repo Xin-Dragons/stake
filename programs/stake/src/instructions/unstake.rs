@@ -18,9 +18,12 @@ use anchor_spl::{
 
 use crate::{
     constants::FEES_WALLET,
-    state::{Collection, NftRecord, ProgramConfig, RewardType, StakeRecord, Staker, Subscription},
+    state::{
+        Collection, Emission, NftRecord, ProgramConfig, RewardType, StakeRecord, Staker,
+        Subscription,
+    },
     utils::{calc_reward, calc_tx_fee},
-    StakeError,
+    StakeError, STAKING_ENDS,
 };
 
 #[derive(Accounts)]
@@ -388,8 +391,21 @@ impl<'info> Unstake<'info> {
     }
 }
 
-pub fn unstake_handler(ctx: Context<Unstake>) -> Result<()> {
+pub fn unstake_handler<'info>(ctx: Context<'_, '_, 'info, 'info, Unstake<'info>>) -> Result<()> {
     let staker = &ctx.accounts.staker;
+    let staker_key = staker.key();
+    let nft_auth_bump = staker.nft_auth_bump;
+    let token_auth_bump = staker.token_auth_bump;
+    let current_time = Clock::get().unwrap().unix_timestamp;
+    let staker = &ctx.accounts.staker;
+    let claimer = &ctx.accounts.owner;
+    let collection = &ctx.accounts.collection;
+    let stake_record = &ctx.accounts.stake_record;
+    let nft_record = &mut ctx.accounts.nft_record.as_ref();
+    let amount = &stake_record.sol_balance;
+    let pending_claim = stake_record.pending_claim;
+    let can_claim_at = stake_record.can_claim_at;
+    let pending_claim = stake_record.pending_claim;
 
     // check unchecked master edition account is as metatdata program account
     require_eq!(
@@ -397,84 +413,202 @@ pub fn unstake_handler(ctx: Context<Unstake>) -> Result<()> {
         ctx.accounts.metadata_program.key()
     );
 
-    let Staker {
-        token_auth_bump,
-        nft_auth_bump,
-        ..
-    } = **staker.as_ref();
+    let Collection { custodial, .. } = ***collection;
 
-    let Collection {
-        minimum_period,
-        custodial,
-        staking_ends_at,
-        reward_type,
-        lock_for_minimum_period,
-        ..
-    } = **ctx.accounts.collection;
-
-    let reward = &ctx.accounts.collection.reward;
-    let reward_change_time = &ctx.accounts.collection.reward_change_time;
-
-    let staker_key = staker.key();
-
-    let staked_at = ctx.accounts.stake_record.staked_at;
-
-    let (reward_tokens, current_time, is_eligible_for_reward) = calc_reward(
-        staked_at,
-        minimum_period,
-        &reward,
-        reward_change_time,
-        staking_ends_at,
-    )
-    .unwrap();
-
-    if lock_for_minimum_period && !is_eligible_for_reward {
-        return err!(StakeError::MinimumPeriodNotReached);
-    }
-
-    let token_auth_seed = &[
+    let authority_seed = &[
         &b"STAKE"[..],
         &staker_key.as_ref(),
         &b"token-authority"[..],
         &[token_auth_bump],
     ];
 
-    if is_eligible_for_reward {
-        match reward_type {
-            RewardType::MintToken => {
-                mint_to(
-                    ctx.accounts
-                        .mint_token_ctx()
-                        .with_signer(&[&token_auth_seed[..]]),
-                    reward_tokens,
-                )?;
-            }
-            RewardType::TransferToken => {
-                transfer(
-                    ctx.accounts
-                        .transfer_token_ctx()
-                        .with_signer(&[&token_auth_seed[..]]),
-                    reward_tokens,
-                )?;
-                let collection = &mut ctx.accounts.collection;
-                collection.decrease_current_balance(staked_at, current_time)?;
-            }
-            RewardType::Points => {
-                let nft_record = &mut ctx
-                    .accounts
-                    .nft_record
-                    .as_mut()
-                    .expect("nft_record expected");
+    let binding = &[&authority_seed[..]];
 
-                msg!("REWARD {}", reward_tokens);
+    let staked_at = stake_record.staked_at;
 
-                nft_record.add_points(reward_tokens)?;
-            }
-            _ => {}
-        }
+    if stake_record.can_claim_at > current_time {
+        return err!(StakeError::MinimumPeriodNotReached);
     }
 
-    let txn_signer: &[&[u8]; 4] = &[
+    if stake_record
+        .emissions
+        .contains(&collection.token_emission.unwrap_or(Pubkey::default()))
+    {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| collection.token_emission.unwrap().to_bytes() == acc.key().to_bytes())
+            .unwrap();
+
+        let mut token_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            token_emission.key(),
+            collection.token_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        let Emission {
+            end_time,
+            minimum_period,
+            ..
+        } = *token_emission;
+
+        let reward_record = &token_emission.reward;
+        let reward_change_time_record = &token_emission.reward_change_time;
+
+        let (mut reward_tokens, current_time, is_eligible_for_reward) = calc_reward(
+            staked_at,
+            minimum_period.unwrap_or(0),
+            reward_record,
+            reward_change_time_record,
+            end_time,
+        )
+        .unwrap();
+
+        if is_eligible_for_reward && reward_tokens > 0 {
+            if staker.token_vault {
+                transfer(
+                    ctx.accounts.transfer_token_ctx().with_signer(binding),
+                    reward_tokens,
+                )?;
+                token_emission.decrease_current_balance(staked_at, current_time)?;
+            } else {
+                mint_to(
+                    ctx.accounts.mint_token_ctx().with_signer(binding),
+                    reward_tokens,
+                )?;
+            }
+        }
+
+        token_emission.decrease_staked_items()?;
+
+        token_emission.exit(ctx.program_id)?;
+    }
+
+    if stake_record.emissions.contains(
+        &collection
+            .distribution_emission
+            .unwrap_or(Pubkey::default()),
+    ) {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| {
+                collection.distribution_emission.unwrap().to_bytes() == acc.key().to_bytes()
+            })
+            .unwrap();
+
+        let mut distribution_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            distribution_emission.key(),
+            collection.distribution_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        distribution_emission.decrease_staked_items()?;
+
+        distribution_emission.exit(ctx.program_id)?;
+    }
+
+    if stake_record
+        .emissions
+        .contains(&collection.points_emission.unwrap_or(Pubkey::default()))
+    {
+        // let account = ctx
+        //     .remaining_accounts
+        //     .iter()
+        //     .find(|acc| collection.points_emission.unwrap().to_bytes() == acc.key().to_bytes())
+        //     .unwrap();
+
+        // let mut points_emission =
+        //     Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        // require_keys_eq!(
+        //     points_emission.key(),
+        //     collection.points_emission.unwrap(),
+        //     StakeError::InvalidEmission
+        // );
+
+        // let Emission {
+        //     end_time,
+        //     minimum_period,
+        //     token_vault,
+        //     ..
+        // } = *points_emission;
+
+        // let reward_record = &points_emission.reward;
+        // let reward_change_time_record = &points_emission.reward_change_time;
+
+        // let (mut reward_tokens, current_time, is_eligible_for_reward) = calc_reward(
+        //     staked_at,
+        //     minimum_period.unwrap_or(0),
+        //     reward_record,
+        //     reward_change_time_record,
+        //     end_time,
+        // )
+        // .unwrap();
+
+        // nft_record.unwrap().add_points(reward_tokens);
+    }
+
+    if stake_record
+        .emissions
+        .contains(&collection.selection_emission.unwrap_or(Pubkey::default()))
+    {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| collection.selection_emission.unwrap().to_bytes() == acc.key().to_bytes())
+            .unwrap();
+
+        let mut selection_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            selection_emission.key(),
+            collection.selection_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        require_gte!(
+            current_time,
+            can_claim_at,
+            StakeError::MinimumPeriodNotReached
+        );
+
+        let Emission {
+            end_time,
+            minimum_period,
+            ..
+        } = *selection_emission;
+
+        if pending_claim > 0 {
+            if staker.token_vault {
+                transfer(
+                    ctx.accounts.transfer_token_ctx().with_signer(binding),
+                    pending_claim,
+                )?;
+                selection_emission.decrease_current_balance(staked_at, current_time)?;
+            } else {
+                mint_to(
+                    ctx.accounts.mint_token_ctx().with_signer(binding),
+                    pending_claim,
+                )?;
+            }
+        }
+
+        selection_emission.decrease_staked_items()?;
+
+        selection_emission.exit(ctx.program_id)?;
+    }
+
+    // let stake_record: &mut Box<Account<'_, StakeRecord>> = &mut ctx.accounts.stake_record;
+
+    let txn_signer = &[
         &b"STAKE"[..],
         &staker_key.as_ref(),
         &b"nft-authority"[..],
@@ -522,7 +656,6 @@ pub fn unstake_handler(ctx: Context<Unstake>) -> Result<()> {
 
     let collection = &mut ctx.accounts.collection;
 
-    collection.update_staked_weight(staked_at, false)?;
     collection.decrease_staker_count()?;
     let staker = &mut ctx.accounts.staker;
     staker.decrease_staker_count()

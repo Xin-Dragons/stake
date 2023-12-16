@@ -127,6 +127,7 @@ pub fn update_stake_subscription_handler(
     ctx: Context<UpdateStake>,
     subscription: Subscription,
 ) -> Result<()> {
+    let current_time = Clock::get().unwrap().unix_timestamp;
     let program_data = &ctx.accounts.program_data.as_ref();
     if Option::is_none(program_data)
         || program_data.unwrap().upgrade_authority_address != Some(ctx.accounts.signer.key())
@@ -179,6 +180,7 @@ pub fn update_stake_subscription_handler(
             ctx.accounts.staker.prev_subscription = ctx.accounts.staker.subscription;
         }
     }
+    ctx.accounts.staker.next_payment_time = current_time + 60 * 60 * 24 * 30;
     ctx.accounts.staker.subscription = subscription;
     Ok(())
 }

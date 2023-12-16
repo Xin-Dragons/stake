@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer, Mint, Token, TokenAccount, Transfer};
 
 use crate::{
-    state::{Collection, Staker},
+    state::{Collection, Emission, RewardType, Staker},
     StakeError,
 };
 
@@ -28,7 +28,13 @@ pub struct AddFunds<'info> {
     pub collection: Account<'info, Collection>,
 
     #[account(
-        address = collection.reward_token.unwrap() @ StakeError::InvalidRewardToken
+        mut,
+        has_one = collection
+    )]
+    pub emission: Account<'info, Emission>,
+
+    #[account(
+        // address = emission.reward_type.reward_token.unwrap() @ StakeError::InvalidRewardToken
     )]
     pub reward_mint: Account<'info, Mint>,
 
@@ -72,14 +78,39 @@ impl<'info> AddFunds<'info> {
 }
 
 pub fn add_funds_handler(ctx: Context<AddFunds>, amount: u64) -> Result<()> {
+    let collection = &ctx.accounts.collection;
+    let emission = &ctx.accounts.emission;
     let status = ctx.accounts.staker.is_active;
 
     require_eq!(status, true, StakeError::StakeInactive);
-    require!(
-        Option::is_some(&ctx.accounts.collection.reward_token),
-        StakeError::NoRewardMint
+
+    require_keys_eq!(
+        collection.token_emission.expect("token_emission expected"),
+        emission.key(),
+        StakeError::InvalidEmission
+    );
+
+    match emission.reward_type {
+        RewardType::Token => {}
+        RewardType::Selection { options: _ } => {}
+        _ => {
+            return err!(StakeError::InvalidEmission);
+        }
+    }
+
+    require_keys_eq!(
+        emission.token_mint.unwrap(),
+        ctx.accounts.reward_mint.key(),
+        StakeError::InvalidRewardToken
+    );
+
+    require_keys_neq!(
+        ctx.accounts.reward_mint.key(),
+        ctx.accounts.staker.token_mint.unwrap_or(Pubkey::default()),
+        StakeError::InvalidEmission
     );
 
     transfer(ctx.accounts.transfer_token_ctx(), amount)?;
-    ctx.accounts.collection.increase_current_balance(amount)
+    let emission = &mut ctx.accounts.emission;
+    emission.increase_current_balance(amount)
 }

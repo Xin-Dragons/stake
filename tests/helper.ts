@@ -15,7 +15,9 @@ export const adminProgram = anchor.workspace.Stake as anchor.Program<Stake>
 before(async () => {
   await createToken(umi, BigInt(1_000), 9, createSignerFromKeypair(umi, USDC))
   await umi.rpc.airdrop(FEES_WALLET, sol(1))
+  console.log("HI")
   await initProgramConfig(adminProgram)
+  console.log("BYE")
 })
 
 export function programPaidBy(payer: Keypair): anchor.Program<Stake> {
@@ -30,6 +32,10 @@ export function programPaidBy(payer: Keypair): anchor.Program<Stake> {
 
 export async function createNewUser() {
   const kp = umi.eddsa.generateKeypair()
+
+  const sig = await umi.rpc.airdrop(kp.publicKey, sol(100))
+
+  const bal = await umi.rpc.getBalance(kp.publicKey)
 
   const mint = await fetchMint(umi, USDC.publicKey)
 

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer, Mint, Token, TokenAccount, Transfer};
 
 use crate::{
-    state::{Collection, Staker},
+    state::{Collection, Emission, Staker},
     StakeError,
 };
 
@@ -27,8 +27,11 @@ pub struct RemoveFunds<'info> {
     )]
     pub collection: Account<'info, Collection>,
 
+    #[account(mut, has_one = collection)]
+    pub emission: Account<'info, Emission>,
+
     #[account(
-        address = collection.reward_token.unwrap() @ StakeError::InvalidRewardToken
+        address = emission.token_mint.unwrap() @ StakeError::InvalidRewardToken
     )]
     pub reward_mint: Account<'info, Mint>,
 
@@ -75,22 +78,15 @@ pub fn remove_funds_handler(ctx: Context<RemoveFunds>) -> Result<()> {
     let staker_key = &ctx.accounts.staker.key();
     let token_auth_bump = ctx.accounts.staker.token_auth_bump;
     let collection = &ctx.accounts.collection;
+    let emission = &ctx.accounts.emission;
 
-    require_eq!(
-        ctx.accounts.collection.is_active,
-        false,
-        StakeError::CollectionActive
-    );
+    require_eq!(collection.is_active, false, StakeError::CollectionActive);
     require!(
-        Option::is_some(&ctx.accounts.collection.reward_token),
+        Option::is_some(&ctx.accounts.emission.token_mint),
         StakeError::NoRewardMint
     );
 
-    require_gt!(
-        ctx.accounts.collection.current_balance,
-        0,
-        StakeError::NoTokensToClaim
-    );
+    require_gt!(emission.current_balance, 0, StakeError::NoTokensToClaim);
 
     require_eq!(
         ctx.accounts.collection.current_stakers_count,
@@ -109,10 +105,10 @@ pub fn remove_funds_handler(ctx: Context<RemoveFunds>) -> Result<()> {
         ctx.accounts
             .transfer_token_ctx()
             .with_signer(&[&token_auth_seed[..]]),
-        collection.current_balance,
+        emission.current_balance,
     )?;
 
-    ctx.accounts.collection.current_balance = 0;
+    ctx.accounts.emission.current_balance = 0;
 
     Ok(())
 }

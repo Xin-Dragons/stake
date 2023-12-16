@@ -23,9 +23,17 @@ pub fn calc_reward(
     // the index during which NFT staked
     let stake_index = reward_change_time.binary_search(&staked_at);
 
+    msg!("stake_index {:?}", stake_index);
+
     let index = match stake_index {
         Ok(i) => i,
-        Err(i) => i - 1,
+        Err(i) => {
+            if i == 0 {
+                i
+            } else {
+                i - 1
+            }
+        }
     };
 
     let mut reward_tokens: u64 = 0;

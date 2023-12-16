@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{transfer, Mint, Token, TokenAccount, Transfer},
+    token::{
+        set_authority, spl_token::instruction::AuthorityType, transfer, Mint, SetAuthority, Token,
+        TokenAccount, Transfer,
+    },
 };
 use proc_macro_regex::regex;
-use rustrict::CensorStr;
 
 use crate::{
     constants::{SUBSCRIPTION_WALLET, USDC_MINT_PUBKEY},
@@ -36,12 +38,15 @@ pub struct Init<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
+    #[account(mut)]
+    pub token_mint: Option<Box<Account<'info, Mint>>>,
+
     #[account(
         mut,
         associated_token::mint = usdc,
         associated_token::authority = authority
     )]
-    pub usdc_account: Box<Account<'info, TokenAccount>>,
+    pub usdc_account: Option<Account<'info, TokenAccount>>,
 
     #[account(
         init_if_needed,
@@ -49,13 +54,13 @@ pub struct Init<'info> {
         associated_token::mint = usdc,
         associated_token::authority = subscription_wallet
     )]
-    pub subscription_usdc_account: Box<Account<'info, TokenAccount>>,
+    pub subscription_usdc_account: Option<Account<'info, TokenAccount>>,
 
     #[account(address = SUBSCRIPTION_WALLET)]
-    pub subscription_wallet: SystemAccount<'info>,
+    pub subscription_wallet: Option<SystemAccount<'info>>,
 
     #[account(address = USDC_MINT_PUBKEY)]
-    pub usdc: Box<Account<'info, Mint>>,
+    pub usdc: Option<Account<'info, Mint>>,
 
     /// CHECK: This account is not read or written
     #[account(
@@ -87,8 +92,16 @@ pub struct Init<'info> {
 impl<'info> Init<'info> {
     pub fn transfer_subscription_ctx(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
         let cpi_accounts = Transfer {
-            from: self.usdc_account.to_account_info(),
-            to: self.subscription_usdc_account.to_account_info(),
+            from: self
+                .usdc_account
+                .as_ref()
+                .expect("usdc_account missing")
+                .to_account_info(),
+            to: self
+                .subscription_usdc_account
+                .as_ref()
+                .expect("subscription_usdc_account missing")
+                .to_account_info(),
             authority: self.authority.to_account_info(),
         };
 
@@ -96,6 +109,21 @@ impl<'info> Init<'info> {
 
         CpiContext::new(cpi_program, cpi_accounts)
     }
+
+    // pub fn transfer_auth_ctx(&self) -> CpiContext<'_, '_, '_, 'info, SetAuthority<'info>> {
+    //     let cpi_accounts = SetAuthority {
+    //         account_or_mint: self
+    //             .token_mint
+    //             .as_ref()
+    //             .expect("token_mint expected")
+    //             .to_account_info(),
+    //         current_authority: self.authority.to_account_info(),
+    //     };
+
+    //     let cpi_program = self.token_program.to_account_info();
+
+    //     CpiContext::new(cpi_program, cpi_accounts)
+    // }
 }
 
 pub fn init_handler(
@@ -118,7 +146,7 @@ pub fn init_handler(
     require_gte!(50, name.len(), StakeError::NameTooLong);
     require_gt!(name.len(), 0, StakeError::NameRequired);
 
-    require!(!name.is_inappropriate(), StakeError::ProfanityDetected);
+    // require!(!name.is_inappropriate(), StakeError::ProfanityDetected);
 
     require!(regex_slug(&slug), StakeError::InvalidSlug);
 
@@ -136,6 +164,24 @@ pub fn init_handler(
     } else {
         current_time
     };
+
+    // if Option::is_some(&ctx.accounts.token_mint) {
+    //     let mint_auth = ctx
+    //         .accounts
+    //         .token_mint
+    //         .as_ref()
+    //         .map(|o| o.mint_authority)
+    //         .expect("token_mint expected")
+    //         .unwrap();
+    //     let token_auth = ctx.accounts.token_authority.key();
+    //     if !token_auth.eq(&mint_auth) {
+    //         set_authority(
+    //             ctx.accounts.transfer_auth_ctx(),
+    //             AuthorityType::MintTokens,
+    //             Some(ctx.accounts.token_authority.key()),
+    //         )?;
+    //     }
+    // }
 
     let staker = &mut ctx.accounts.staker;
 

@@ -7,10 +7,9 @@ mod utils;
 use anchor_spl::token::Mint;
 
 use instructions::*;
-use state::RewardType;
 use state::Subscription;
 
-declare_id!("3bUy55JLr8ra1g1GT7bn7S2KNHPxZtoyc6uf9rcYG4tm");
+declare_id!("STAKEQkGBjkhCXabzB5cUbWgSSvbVJFEm2oEnyWzdKE");
 
 #[cfg(feature = "local-testing")]
 pub mod constants {
@@ -41,9 +40,12 @@ pub struct Test<'info> {
 }
 
 use crate::state::FontStyles;
+use crate::state::RewardType;
 
 #[program]
 pub mod stake {
+
+    use instructions::close_emission::CloseEmission;
 
     use super::*;
 
@@ -67,28 +69,48 @@ pub mod stake {
         )
     }
 
+    pub fn toggle_stake_active(ctx: Context<ToggleStakeActive>, is_active: bool) -> Result<()> {
+        toggle_stake_active_handler(ctx, is_active)
+    }
+
     pub fn init_collection(
         ctx: Context<InitCollection>,
         custodial: bool,
-        reward_type: RewardType,
-        reward: u64,
-        minimum_period: i64,
+        token_vault: bool,
         staking_starts_at: Option<i64>,
-        duration: Option<i64>,
         max_stakers_count: u64,
-        lock_for_minimum_period: bool,
     ) -> Result<()> {
-        init_collection_handler(
+        init_collection_handler(ctx, custodial, staking_starts_at, max_stakers_count)
+    }
+
+    pub fn add_emission(
+        ctx: Context<AddEmission>,
+        reward_type: RewardType,
+        reward: Option<u64>,
+        start_time: Option<i64>,
+        duration: Option<i64>,
+        minimum_period: Option<i64>,
+        starting_balance: Option<u64>,
+    ) -> Result<()> {
+        add_emission_handler(
             ctx,
-            custodial,
             reward_type,
             reward,
-            minimum_period,
-            staking_starts_at,
+            start_time,
             duration,
-            max_stakers_count,
-            lock_for_minimum_period,
+            minimum_period,
+            starting_balance,
         )
+    }
+
+    pub fn distribute(ctx: Context<Distribute>, amount: u64) -> Result<()> {
+        distribute_handler(ctx, amount)
+    }
+
+    pub fn close_emission<'info>(
+        ctx: Context<'_, '_, 'info, 'info, CloseEmission<'info>>,
+    ) -> Result<()> {
+        close_emission_handler(ctx)
     }
 
     pub fn update_theme(
@@ -113,6 +135,13 @@ pub mod stake {
         )
     }
 
+    pub fn toggle_collection_active(
+        ctx: Context<ToggleCollectionActive>,
+        active: bool,
+    ) -> Result<()> {
+        toggle_collection_active_handler(ctx, active)
+    }
+
     pub fn close_collection(ctx: Context<CloseCollection>) -> Result<()> {
         close_collection_handler(ctx)
     }
@@ -121,16 +150,25 @@ pub mod stake {
         pay_subscription_handler(ctx)
     }
 
-    pub fn stake<'info>(ctx: Context<'_, '_, '_, 'info, Stake<'info>>) -> Result<()> {
-        stake_handler(ctx)
+    pub fn stake<'info>(
+        ctx: Context<'_, '_, 'info, 'info, Stake<'info>>,
+        selection: Option<u64>,
+    ) -> Result<()> {
+        stake_handler(ctx, selection)
     }
 
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         claim_handler(ctx)
     }
 
-    pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+    pub fn unstake<'info>(ctx: Context<'_, '_, 'info, 'info, Unstake<'info>>) -> Result<()> {
         unstake_handler(ctx)
+    }
+
+    pub fn force_unstake<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ForceUnstake<'info>>,
+    ) -> Result<()> {
+        force_unstake_handler(ctx)
     }
 
     pub fn extend_emission(ctx: Context<ExtendEmission>, new_ending_time: i64) -> Result<()> {
@@ -179,8 +217,16 @@ pub mod stake {
         update_stake_next_payment_time_handler(ctx, next_payment_time)
     }
 
+    pub fn clear_clugs(ctx: Context<UpdateProgramConfig>) -> Result<()> {
+        clear_slugs_handler(ctx)
+    }
+
     pub fn resize(ctx: Context<Resize>) -> Result<()> {
         resize_handler(ctx)
+    }
+
+    pub fn add_token(ctx: Context<AddToken>, token_vault: bool) -> Result<()> {
+        add_token_handler(ctx, token_vault)
     }
 
     pub fn init_program_config(
@@ -253,7 +299,7 @@ pub enum StakeError {
     NameTooLong,
     #[msg("Name must be provided")]
     NameRequired,
-    #[msg("Dont use profanity in a name")]
+    #[msg("Profanity cannot be used in a name")]
     ProfanityDetected,
     #[msg("Slug already exists - contact us if you think this is an error")]
     SlugExists,
@@ -289,6 +335,8 @@ pub enum StakeError {
     NegativePeriodValue,
     #[msg("stake ends time must be greater than the current time and the start time")]
     InvalidStakeEndTime,
+    #[msg("Stake end time required if using a token vault")]
+    StakeEndTimeRequired,
     #[msg("start time cannot be in the past")]
     StartTimeInPast,
     #[msg("max stakers can't be higher than the total collection size")]
@@ -339,6 +387,8 @@ pub enum StakeError {
     CannotExtendNoEndDate,
     #[msg("all linked collections must be passed in remaining accounts")]
     CollectionsMissing,
+    #[msg("all emissions must be passed in remaining accounts")]
+    EmissionsMissing,
     #[msg("There are no tokens to claim for this collection")]
     NoTokensToClaim,
     #[msg("There are still active stakers who have yet to claim")]
@@ -355,4 +405,38 @@ pub enum StakeError {
     StillHasCollections,
     #[msg("Cannot close a staker that still has staked items")]
     StillHasStakedItems,
+    #[msg("Tokens can only be front loaded with enforced minimum period emissions")]
+    FrontLoadNotLocked,
+    #[msg("Selected emission(s) do not exist")]
+    InvalidEmissions,
+    #[msg("One or more selected emissions is not active")]
+    InvalidEmissionPeriods,
+    #[msg("At least one emission must be provided")]
+    NoEmissionsToAdd,
+    #[msg("Minimum period cannot by used with multiple option emissions")]
+    NoMinPeriodWithOption,
+    #[msg("Reward required with this emission type")]
+    RewardRequired,
+    #[msg("Invalid emission")]
+    InvalidEmission,
+    #[msg("A selection is required for this emission")]
+    EmissionSelectionRequired,
+    #[msg("This index is invalid")]
+    InvalidIndex,
+    #[msg("Only one selection type emission can exist per collection")]
+    SelectionEmissionExists,
+    #[msg("This collection still has active emissions")]
+    StillHasEmissions,
+    #[msg("The program doesn't have mint auth for this token")]
+    NoAuthority,
+    #[msg("This emission is not active")]
+    EmissionNotActive,
+    #[msg("This emission type needs a token mint")]
+    TokenMintRequired,
+    #[msg("This collection already has a token")]
+    TokenExists,
+    #[msg("Token vault address is required")]
+    TokenVaultRequired,
+    #[msg("Invalid creator for NFT")]
+    InvalidCreator,
 }

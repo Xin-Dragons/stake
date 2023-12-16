@@ -88,8 +88,8 @@ impl Default for Theme {
             ],
             body_font: FontStyles::default_body(),
             header_font: FontStyles::default_header(),
-            primary_color: String::from("0BFFD0"),
-            secondary_color: String::from("0BFFD0"),
+            primary_color: String::from("59E6C2"),
+            secondary_color: String::from("D5A08F"),
             dark_mode: true,
         }
     }

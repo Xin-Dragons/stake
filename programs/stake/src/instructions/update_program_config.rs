@@ -27,6 +27,13 @@ pub struct UpdateProgramConfig<'info> {
     pub program_data: Account<'info, ProgramData>,
 }
 
+pub fn clear_slugs_handler(ctx: Context<UpdateProgramConfig>) -> Result<()> {
+    let program_config = &mut ctx.accounts.program_config;
+
+    program_config.slugs = vec![];
+    Ok(())
+}
+
 pub fn update_program_config_handler(
     ctx: Context<UpdateProgramConfig>,
     stake_fee: Option<u64>,

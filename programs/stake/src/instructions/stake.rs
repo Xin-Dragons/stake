@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
@@ -13,17 +15,21 @@ use anchor_spl::{
     },
     token::{Mint, Token, TokenAccount},
 };
+use emission::Emission;
 
 use crate::{
     constants::FEES_WALLET,
-    state::{Collection, NftRecord, ProgramConfig, RewardType, StakeRecord, Staker, Subscription},
+    state::{
+        emission, Collection, NftRecord, ProgramConfig, RewardType, StakeRecord, Staker,
+        Subscription,
+    },
     utils::calc_tx_fee,
     StakeError, STAKING_ENDS,
 };
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
-    #[account()]
+    #[account(mut)]
     pub staker: Box<Account<'info, Staker>>,
 
     #[account(
@@ -96,8 +102,8 @@ pub struct Stake<'info> {
         ],
         seeds::program = Metadata::id(),
         bump,
-        constraint = nft_metadata.collection.as_ref().unwrap().verified @ StakeError::CollectionNotVerified,
-        constraint = nft_metadata.collection.as_ref().unwrap().key == collection.collection_mint @ StakeError::InvalidCollection
+        constraint = Option::is_none(&nft_metadata.collection) || nft_metadata.collection.as_ref().unwrap().verified && nft_metadata.collection.as_ref().unwrap().key == collection.collection_mint @ StakeError::InvalidCollection,
+        constraint = Option::is_some(&nft_metadata.collection) || nft_metadata.creators.as_ref().unwrap().first().unwrap().address == collection.collection_mint && nft_metadata.creators.as_ref().unwrap().first().unwrap().verified @ StakeError::InvalidCreator
     )]
     nft_metadata: Box<Account<'info, MetadataAccount>>,
 
@@ -287,10 +293,178 @@ impl<'info> Stake<'info> {
     }
 }
 
-pub fn stake_handler<'info>(ctx: Context<'_, '_, '_, 'info, Stake<'info>>) -> Result<()> {
+pub fn stake_handler<'info>(
+    ctx: Context<'_, '_, 'info, 'info, Stake<'info>>,
+    selection: Option<u64>,
+) -> Result<()> {
     let staker = &ctx.accounts.staker;
     let collection = &ctx.accounts.collection;
     let current_time = Clock::get().unwrap().unix_timestamp;
+    let owner = ctx.accounts.signer.key();
+    let nft_mint = &ctx.accounts.nft_mint;
+    let nft_record_bump = ctx.bumps.nft_record;
+    let stake_record_bump = ctx.bumps.stake_record;
+
+    // require!(
+    //     ctx.remaining_accounts
+    //         .iter()
+    //         .all(|emission| collection.emissions.contains(&emission.key())),
+    //     StakeError::InvalidEmissions
+    // );
+
+    let mut pending_claim: u64 = 0;
+    let mut can_claim_at: i64 = 0;
+    let mut has_points: bool = false;
+
+    let mut emissions: Vec<Pubkey> = vec![];
+
+    if Option::is_some(&collection.token_emission) {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| collection.token_emission.unwrap().to_bytes() == acc.key().to_bytes())
+            .unwrap();
+
+        let mut token_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            token_emission.key(),
+            collection.token_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        require!(token_emission.active, StakeError::EmissionNotActive);
+        token_emission.update_staked_weight(current_time, true)?;
+        token_emission.increase_staked_items()?;
+
+        emissions.push(token_emission.key());
+
+        token_emission.exit(ctx.program_id)?;
+    }
+
+    if Option::is_some(&collection.points_emission) {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| collection.points_emission.unwrap().to_bytes() == acc.key().to_bytes())
+            .unwrap();
+
+        let mut points_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            points_emission.key(),
+            collection.points_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        require!(points_emission.active, StakeError::EmissionNotActive);
+
+        // let nft_record = &mut ctx.accounts.nft_record.as_ref().unwrap();
+
+        // if nft_record.nft_mint.eq(&Pubkey::default()) {
+        //     ****nft_record = NftRecord::init(nft_mint.key(), nft_record_bump);
+        // }
+
+        points_emission.update_staked_weight(current_time, true)?;
+        points_emission.increase_staked_items()?;
+
+        emissions.push(points_emission.key());
+
+        points_emission.exit(ctx.program_id)?;
+        // let mut emission =
+        // Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+    }
+
+    if Option::is_some(&collection.selection_emission) {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| collection.selection_emission.unwrap().to_bytes() == acc.key().to_bytes())
+            .unwrap();
+
+        let mut selection_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            selection_emission.key(),
+            collection.selection_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        require!(selection_emission.active, StakeError::EmissionNotActive);
+
+        let options = match selection_emission.reward_type.clone() {
+            RewardType::Selection { options } => options,
+            _ => vec![],
+        };
+
+        require_keys_eq!(
+            selection_emission.key(),
+            collection.selection_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        require_gt!(
+            options.len(),
+            selection.unwrap() as usize,
+            StakeError::InvalidIndex
+        );
+        let option = options[selection.expect("Expected selection to be defined") as usize];
+        require_gte!(
+            option.reward,
+            selection_emission.current_balance,
+            StakeError::InsufficientBalanceInVault
+        );
+
+        let balance_owing = option.reward * (option.duration as u64);
+
+        require_gte!(
+            selection_emission.current_balance,
+            balance_owing,
+            StakeError::InsufficientBalanceInVault
+        );
+
+        selection_emission.staked_weight = selection_emission
+            .staked_weight
+            .checked_add(balance_owing.into())
+            .ok_or(StakeError::ProgramAddError)?;
+
+        pending_claim = balance_owing;
+        can_claim_at = current_time + option.duration;
+
+        selection_emission.increase_staked_items()?;
+
+        emissions.push(selection_emission.key());
+
+        selection_emission.exit(ctx.program_id)?;
+    }
+
+    if Option::is_some(&collection.distribution_emission) {
+        let account = ctx
+            .remaining_accounts
+            .iter()
+            .find(|acc| {
+                collection.distribution_emission.unwrap().to_bytes() == acc.key().to_bytes()
+            })
+            .unwrap();
+
+        let mut distribution_emission =
+            Account::<'info, Emission>::try_from(account).expect("Expected emission to be passed");
+
+        require_keys_eq!(
+            distribution_emission.key(),
+            collection.distribution_emission.unwrap(),
+            StakeError::InvalidEmission
+        );
+
+        require!(distribution_emission.active, StakeError::EmissionNotActive);
+
+        distribution_emission.increase_staked_items()?;
+        emissions.push(distribution_emission.key());
+        distribution_emission.exit(ctx.program_id)?;
+    }
 
     let Staker {
         is_active: staker_active,
@@ -308,23 +482,6 @@ pub fn stake_handler<'info>(ctx: Context<'_, '_, '_, 'info, Stake<'info>>) -> Re
     require_eq!(staker_active, true, StakeError::StakeInactive);
     require_eq!(collection_is_active, true, StakeError::CollectionInactive);
     require_gt!(max_stakers, current_stakers, StakeError::MaxStakersReached);
-
-    require_gte!(
-        current_time,
-        collection.staking_starts_at,
-        StakeError::StakeNotLive
-    );
-
-    require_gt!(
-        collection.staking_ends_at.unwrap_or(STAKING_ENDS),
-        current_time,
-        StakeError::StakeOver
-    );
-
-    let owner = ctx.accounts.signer.key();
-    let nft_record_bump = ctx.bumps.nft_record;
-    let stake_record_bump = ctx.bumps.stake_record;
-    let nft_mint = &ctx.accounts.nft_mint;
 
     if custodial {
         ctx.accounts.transfer_nft()?;
@@ -362,21 +519,19 @@ pub fn stake_handler<'info>(ctx: Context<'_, '_, '_, 'info, Stake<'info>>) -> Re
 
     let collection = &mut ctx.accounts.collection;
 
-    match collection.reward_type {
-        RewardType::Points => {
-            let nft_record = &mut ctx.accounts.nft_record.as_mut().unwrap();
-
-            if nft_record.nft_mint.eq(&Pubkey::default()) {
-                ****nft_record = NftRecord::init(nft_mint.key(), nft_record_bump);
-            }
-        }
-        RewardType::TransferToken => {}
-        _ => {}
-    }
-    collection.update_staked_weight(current_time, true)?;
+    if has_points {}
 
     let stake_record = &mut ctx.accounts.stake_record;
-    ***stake_record = StakeRecord::init(owner, nft_mint.key(), current_time, stake_record_bump);
+    ***stake_record = StakeRecord::init(
+        staker.key(),
+        owner,
+        nft_mint.key(),
+        emissions,
+        current_time,
+        pending_claim,
+        can_claim_at,
+        stake_record_bump,
+    );
 
     collection.increase_staker_count()?;
     let staker = &mut ctx.accounts.staker;
