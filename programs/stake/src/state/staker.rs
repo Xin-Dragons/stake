@@ -195,9 +195,9 @@ impl Staker {
             _ => 0,
         };
 
-        if self.own_domain {
-            subscription_amount += program_config.own_domain_fee
-        }
+        // if self.own_domain {
+        //     subscription_amount += program_config.own_domain_fee
+        // }
 
         if self.remove_branding {
             subscription_amount += program_config.remove_branding_fee

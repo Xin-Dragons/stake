@@ -1,15 +1,19 @@
 pub use collection::*;
+pub use distribution::*;
 pub use emission::*;
 pub use nft_record::*;
 pub use program_config::*;
+pub use share_record::*;
 pub use stake_record::*;
 pub use staker::*;
 pub use theme::*;
 
 pub mod collection;
+pub mod distribution;
 pub mod emission;
 pub mod nft_record;
 pub mod program_config;
+pub mod share_record;
 pub mod stake_record;
 pub mod staker;
 pub mod theme;

@@ -60,6 +60,24 @@ export function findStakeRecordPda(staker: PublicKey, nftMint: PublicKey) {
   ])[0]
 }
 
+export function findVaultAuthorityPda(staker: PublicKey, distribution: PublicKey) {
+  return umi.eddsa.findPda(programId, [
+    string({ size: "variable" }).serialize("STAKE"),
+    publicKeySerializer().serialize(staker),
+    publicKeySerializer().serialize(distribution),
+    string({ size: "variable" }).serialize("distribution-vault"),
+  ])[0]
+}
+
+export function findShareRecordPda(distribution: PublicKey, nftMint: PublicKey) {
+  return umi.eddsa.findPda(programId, [
+    string({ size: "variable" }).serialize("STAKE"),
+    publicKeySerializer().serialize(distribution),
+    publicKeySerializer().serialize(nftMint),
+    string({ size: "variable" }).serialize("share-record"),
+  ])[0]
+}
+
 export function findNftMetadataPda(nftMint: PublicKey) {
   return findMetadataPda(umi, { mint: nftMint })[0]
 }

@@ -314,7 +314,6 @@ pub fn stake_handler<'info>(
 
     let mut pending_claim: u64 = 0;
     let mut can_claim_at: i64 = 0;
-    let mut has_points: bool = false;
 
     let mut emissions: Vec<Pubkey> = vec![];
 
@@ -479,8 +478,22 @@ pub fn stake_handler<'info>(
         ..
     } = **collection.as_ref();
 
-    require_eq!(staker_active, true, StakeError::StakeInactive);
-    require_eq!(collection_is_active, true, StakeError::CollectionInactive);
+    if !staker_active {
+        require_keys_eq!(
+            ctx.accounts.staker.authority,
+            ctx.accounts.signer.key(),
+            StakeError::StakeInactive
+        )
+    }
+
+    if !collection_is_active {
+        require_keys_eq!(
+            ctx.accounts.staker.authority,
+            ctx.accounts.signer.key(),
+            StakeError::CollectionInactive
+        )
+    }
+
     require_gt!(max_stakers, current_stakers, StakeError::MaxStakersReached);
 
     if custodial {
@@ -518,8 +531,6 @@ pub fn stake_handler<'info>(
     }
 
     let collection = &mut ctx.accounts.collection;
-
-    if has_points {}
 
     let stake_record = &mut ctx.accounts.stake_record;
     ***stake_record = StakeRecord::init(

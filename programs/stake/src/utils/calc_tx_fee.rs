@@ -7,8 +7,7 @@ pub fn calc_tx_fee(staker: &Staker, fee: u64) -> u64 {
     let current_time: i64 = clock.unix_timestamp;
     let next_payment_time: i64 = staker.next_payment_time;
     let staker_subscription: &Subscription = &staker.get_subscription();
-    let has_bolt_ons: bool =
-        staker.own_domain || staker.remove_branding || staker.collections.len() > 1;
+    let has_bolt_ons: bool = staker.remove_branding;
     let grace_period: i64 = 60 * 60 * 24 * 7;
     let cut_off: i64 = next_payment_time + grace_period;
 

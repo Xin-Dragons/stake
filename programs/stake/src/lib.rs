@@ -73,6 +73,16 @@ pub mod stake {
         toggle_stake_active_handler(ctx, is_active)
     }
 
+    pub fn init_distribution(
+        ctx: Context<InitDistribution>,
+        label: String,
+        uri: String,
+        num_shares: u32,
+        amount: u64,
+    ) -> Result<()> {
+        init_distribution_handler(ctx, label, uri, num_shares, amount)
+    }
+
     pub fn init_collection(
         ctx: Context<InitCollection>,
         custodial: bool,
@@ -81,6 +91,10 @@ pub mod stake {
         max_stakers_count: u64,
     ) -> Result<()> {
         init_collection_handler(ctx, custodial, staking_starts_at, max_stakers_count)
+    }
+
+    pub fn delegate_stake(ctx: Context<DelegateStake>) -> Result<()> {
+        handle_delegate_stake(ctx)
     }
 
     pub fn add_emission(
@@ -205,7 +219,7 @@ pub mod stake {
         update_stake_remove_branding_handler(ctx, remove_branding)
     }
 
-    pub fn update_stake_own_domain(ctx: Context<UpdateStake>, own_domain: bool) -> Result<()> {
+    pub fn update_stake_own_domain(ctx: Context<UpdateStake>, own_domain: String) -> Result<()> {
         update_stake_own_domain_handler(ctx, own_domain)
     }
 
@@ -439,4 +453,10 @@ pub enum StakeError {
     TokenVaultRequired,
     #[msg("Invalid creator for NFT")]
     InvalidCreator,
+    #[msg("Label max length is 20 chars")]
+    LabelTooLong,
+    #[msg("Amount must be greater than 0")]
+    AmountTooLow,
+    #[msg("The total shares have already been funded for this distribution")]
+    TotalSharesFunded,
 }

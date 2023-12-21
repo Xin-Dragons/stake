@@ -23,9 +23,11 @@ import {
   findNftRecordPda,
   findProgramConfigPda,
   findProgramDataAddress,
+  findShareRecordPda,
   findStakeRecordPda,
   findStakooorCollectionId,
   findTokenAuthorityPda,
+  findVaultAuthorityPda,
   getTokenAccount,
   getTokenRecordPda,
 } from "./pdas"
@@ -108,17 +110,77 @@ export async function stake(program: anchor.Program<Stake>, staker: PublicKey, n
     .rpc()
 }
 
+export async function initDistribution(
+  program: anchor.Program<Stake>,
+  staker: PublicKey,
+  collection: PublicKey,
+  distribution: Keypair,
+  label: string,
+  uri: string,
+  numShares: number,
+  amount: anchor.BN,
+  tokenMint?: PublicKey
+) {
+  const tokenAccount = tokenMint ? getTokenAccount(tokenMint, fromWeb3JsPublicKey(program.provider.publicKey)) : null
+  const vaultAuthority = findVaultAuthorityPda(staker, distribution.publicKey)
+  const tokenVault = tokenMint ? getTokenAccount(tokenMint, vaultAuthority) : null
+
+  return await program.methods
+    .initDistribution(label, uri, numShares, amount)
+    .accounts({
+      staker,
+      collection,
+      distribution: distribution.publicKey,
+      tokenMint: tokenMint || null,
+      tokenAccount,
+      tokenVault,
+      vaultAuthority,
+    })
+    .signers([toWeb3JsKeypair(distribution)])
+    .rpc()
+}
+
+export async function distribute(
+  program: anchor.Program<Stake>,
+  staker: PublicKey,
+  distribution: PublicKey,
+  stakeRecord: PublicKey,
+  amount: anchor.BN
+) {
+  const stakeRecordAccount = await program.account.stakeRecord.fetch(stakeRecord)
+  const shareRecord = findShareRecordPda(distribution, fromWeb3JsPublicKey(stakeRecordAccount.nftMint))
+  const distributionAccount = await program.account.distribution.fetch(distribution)
+  const collection = distributionAccount.collection
+
+  console.log({ distribution, collection, stakeRecord, shareRecord })
+
+  return await program.methods
+    .distribute(amount)
+    .accounts({
+      staker,
+      distribution,
+      collection,
+      stakeRecord,
+      shareRecord,
+    })
+    .rpc()
+    .catch((err) => console.log(err))
+}
+
 export async function unstake(program: anchor.Program<Stake>, staker: PublicKey, nft: DigitalAsset) {
   const collection = findStakooorCollectionId(staker, unwrapOption(nft.metadata.collection).key)
+  const stakeAccount = await program.account.staker.fetch(staker)
   const collectionAccount = await program.account.collection.fetch(collection)
 
   const isPnft = unwrapOption(nft.metadata.tokenStandard) === TokenStandard.ProgrammableNonFungible
 
   const nftRecord = collectionAccount.pointsEmission ? findNftRecordPda(staker, nft.publicKey) : null
 
-  const tokenMint = collectionAccount.tokenMint ? fromWeb3JsPublicKey(collectionAccount.tokenMint) : null
+  const isToken = !!collectionAccount.tokenEmission
+
+  const tokenMint = isToken ? fromWeb3JsPublicKey(stakeAccount.tokenMint) : null
   const tokenAuthority = findTokenAuthorityPda(staker)
-  const stakeTokenVault = tokenMint && collectionAccount.tokenVault ? getTokenAccount(tokenMint, tokenAuthority) : null
+  const stakeTokenVault = tokenMint && stakeAccount.tokenVault ? getTokenAccount(tokenMint, tokenAuthority) : null
   const rewardReceiveAccount =
     tokenMint && (collectionAccount.tokenEmission || collectionAccount.selectionEmission)
       ? getTokenAccount(tokenMint, fromWeb3JsPublicKey(program.provider.publicKey))
@@ -215,6 +277,7 @@ export async function addEmission(
   duration: number | null = null,
   startingBalance: number | null = null
 ) {
+  const stakerAccount = await program.account.staker.fetch(staker)
   const collectionAccount = await program.account.collection.fetch(collection)
   const collectionMint = await fetchDigitalAsset(umi, fromWeb3JsPublicKey(collectionAccount.collectionMint))
   const rewardBn = new BN(reward)
@@ -222,7 +285,8 @@ export async function addEmission(
   const startingBalanceBn = startingBalance === null ? null : new BN(startingBalance)
   const minimumPeriodBn = new BN(minimumPeriod)
   const tokenAuthority = findTokenAuthorityPda(staker)
-  const { tokenMint, tokenVault } = collectionAccount
+  const { tokenMint, tokenVault } = stakerAccount
+
   const stakeTokenVault =
     tokenMint && tokenVault ? getTokenAccount(fromWeb3JsPublicKey(tokenMint), tokenAuthority) : null
   const tokenAccount = tokenMint
@@ -249,13 +313,24 @@ export async function addEmission(
   return sig
 }
 
+export async function toggleCollection(
+  program: anchor.Program<Stake>,
+  staker: PublicKey,
+  collection: PublicKey,
+  active: boolean
+) {
+  return await program.methods.toggleCollectionActive(active).accounts({ staker, collection }).rpc()
+}
+
+export async function toggleStake(program: anchor.Program<Stake>, staker: PublicKey, active: boolean) {
+  return await program.methods.toggleStakeActive(active).accounts({ staker }).rpc()
+}
+
 export async function initCollection(
   program: anchor.Program<Stake>,
   staker: PublicKey,
   collectionMintPk: PublicKey,
-  tokenMint: PublicKey,
   custodial: boolean = false,
-  tokenVault: boolean = false,
   startTime: anchor.BN | null = null
 ) {
   let stakerAccount = await program.account.staker.fetch(staker)
@@ -266,13 +341,12 @@ export async function initCollection(
   const tokenAuthority = findTokenAuthorityPda(staker)
 
   const sig = await program.methods
-    .initCollection(custodial, tokenVault, startTime, new anchor.BN(Number(maxStakerCount)))
+    .initCollection(custodial, false, startTime, new anchor.BN(Number(maxStakerCount)))
     .accounts({
       programConfig: findProgramConfigPda(),
       staker,
       collection,
       collectionMint: collectionMintPk,
-      tokenMint,
       tokenAuthority,
     })
     .rpc()
@@ -304,6 +378,7 @@ export async function init(
   keypair: Keypair,
   slug: string,
   name: string = "A name",
+  tokenMint?: PublicKey,
   subscription: Subscription = { free: {} },
   removeBranding = false,
   ownDomain = false
@@ -322,6 +397,7 @@ export async function init(
       tokenAuthority,
       nftAuthority,
       usdc,
+      tokenMint: tokenMint || null,
       usdcAccount: getTokenAccount(usdc, fromWeb3JsPublicKey(program.provider.publicKey)),
       subscriptionWallet: FEES_WALLET,
       subscriptionUsdcAccount: getTokenAccount(usdc, FEES_WALLET),
@@ -330,13 +406,28 @@ export async function init(
     .rpc()
 
   const stakerAccount = await program.account.staker.fetch(staker)
-
-  assert.ok(stakerAccount.isActive, "Expected staker to be active")
-
   return stakerAccount
 }
 
+export async function addToken(
+  program: anchor.Program<Stake>,
+  staker: PublicKey,
+  tokenMint: PublicKey,
+  useTokenVault: boolean
+) {
+  const tokenAccount = getTokenAccount(tokenMint, fromWeb3JsPublicKey(program.provider.publicKey))
+  const tokenAuthority = findTokenAuthorityPda(staker)
+  const tokenVault = getTokenAccount(tokenMint, tokenAuthority)
+  const sig = await program.methods
+    .addToken(useTokenVault)
+    .accounts({ staker, tokenMint, tokenAccount, tokenAuthority, tokenVault })
+    .rpc()
+
+  return sig
+}
+
 export async function claim(program: anchor.Program<Stake>, staker: PublicKey, nft: DigitalAsset, emission: PublicKey) {
+  const stakeAccount = await program.account.staker.fetch(staker)
   const collectionMintPk = unwrapOption(nft.metadata.collection).key
   const collection = findStakooorCollectionId(staker, collectionMintPk)
   const collectionAccount = await program.account.collection.fetch(collection)
@@ -344,13 +435,15 @@ export async function claim(program: anchor.Program<Stake>, staker: PublicKey, n
 
   const nftRecord = isEqual(emissionAccount.rewardType, { points: {} }) ? findNftRecordPda(staker, nft.publicKey) : null
 
-  const tokenMint = collectionAccount.tokenMint ? fromWeb3JsPublicKey(collectionAccount.tokenMint) : null
+  const isToken = isEqual(emissionAccount.rewardType, { token: {} })
+
+  const tokenMint = isToken ? fromWeb3JsPublicKey(stakeAccount.tokenMint) : null
   const rewardReceiveAccount =
     tokenMint && (collectionAccount.tokenEmission || collectionAccount.selectionEmission)
       ? getTokenAccount(tokenMint, fromWeb3JsPublicKey(program.provider.publicKey))
       : null
   const tokenAuthority = findTokenAuthorityPda(staker)
-  const stakeTokenVault = collectionAccount.tokenVault ? getTokenAccount(tokenMint, tokenAuthority) : null
+  const stakeTokenVault = stakeAccount.tokenVault ? getTokenAccount(tokenMint, tokenAuthority) : null
   const programConfig = findProgramConfigPda()
 
   const stakeRecord = findStakeRecordPda(staker, nft.publicKey)

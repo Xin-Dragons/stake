@@ -219,33 +219,42 @@ pub fn update_stake_remove_branding_handler(
     Ok(())
 }
 
-pub fn update_stake_own_domain_handler(ctx: Context<UpdateStake>, own_domain: bool) -> Result<()> {
-    let program_data = &ctx.accounts.program_data.as_ref();
-    if Option::is_none(program_data)
-        || program_data.unwrap().upgrade_authority_address != Some(ctx.accounts.signer.key())
-    {
-        if ctx
-            .accounts
-            .staker
-            .is_in_arrears(&ctx.accounts.program_config)
-        {
-            return err!(StakeError::StakeInArrears);
-        }
+pub fn update_stake_own_domain_handler(
+    ctx: Context<UpdateStake>,
+    own_domain: String,
+) -> Result<()> {
+    // let program_data = &ctx.accounts.program_data.as_ref();
+    // if Option::is_none(program_data)
+    //     || program_data.unwrap().upgrade_authority_address != Some(ctx.accounts.signer.key())
+    // {
+    //     if ctx
+    //         .accounts
+    //         .staker
+    //         .is_in_arrears(&ctx.accounts.program_config)
+    //     {
+    //         return err!(StakeError::StakeInArrears);
+    //     }
 
-        let fee: u64 = if own_domain {
-            ctx.accounts.program_config.own_domain_fee
-        } else {
-            0
-        };
+    //     let fee: u64 = if !own_domain.is_empty() {
+    //         ctx.accounts.program_config.own_domain_fee
+    //     } else {
+    //         0
+    //     };
 
-        // only charge if they didn't have it before
-        if !ctx.accounts.staker.own_domain {
-            let fee_payable = calc_pro_rata_fee(ctx.accounts.staker.next_payment_time, fee)?;
-            if fee_payable > 0 {
-                transfer(ctx.accounts.transfer_subscription_ctx(), fee_payable)?;
-            }
-        }
+    //     // only charge if they didn't have it before
+    //     if !ctx.accounts.staker.own_domain {
+    //         let fee_payable = calc_pro_rata_fee(ctx.accounts.staker.next_payment_time, fee)?;
+    //         if fee_payable > 0 {
+    //             transfer(ctx.accounts.transfer_subscription_ctx(), fee_payable)?;
+    //         }
+    //     }
+    // }
+    if own_domain.is_empty() {
+        ctx.accounts.staker.own_domain = false;
+        ctx.accounts.staker.custom_domain = None;
+    } else {
+        ctx.accounts.staker.own_domain = true;
+        ctx.accounts.staker.custom_domain = Some(own_domain);
     }
-    ctx.accounts.staker.own_domain = own_domain;
     Ok(())
 }
